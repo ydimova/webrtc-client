@@ -74,15 +74,16 @@
             if (pc.iceGatheringState === 'complete') {
                 log("[5] Signaling GCE via HTTP POST...");
 
-                try {
-                    const res = await fetch(`http://${GCE_IP}:8080/offer`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            sdp: pc.localDescription.sdp,
-                            type: pc.localDescription.type
-                        })
-                    });
+            const response = await fetch('https://webrtc-poc.duckdns.org:8080/offer', {
+                method: 'POST',
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                }),
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
 
                     const answer = await res.json();
                     log("[6] Answer received. Finalizing handshake...");
