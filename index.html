@@ -75,7 +75,7 @@
                 log("[5] Signaling GCE via HTTP POST...");
 
                 try {
-                    const res = await fetch(`http://${GCE_IP}:8080/offer`, {
+                    const response = await fetch('https://webrtc-poc.duckdns.org:8080/offer', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
