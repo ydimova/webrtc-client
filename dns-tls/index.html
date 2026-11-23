@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SNI block PoC</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 16px; }
+  button { margin: 0 .4rem .4rem 0; }
+  pre { background: #f3f3f3; padding: .8rem; white-space: pre-wrap; min-height: 6rem; }
+  code { background: #f3f3f3; padding: 0 .2rem; }
+</style>
+<script>
+  const out = [];
+  window.pocLog = (m) => {
+    const line = new Date().toISOString().slice(11, 23) + "  " + m;
+    out.push(line);
+    console.log("[poc]", m);
+    const pre = document.getElementById("log");
+    if (pre) pre.textContent = out.join("\n");
+  };
+  window.addEventListener("error", (e) => {
+    if (e.target && e.target.tagName === "SCRIPT") pocLog("tracker script failed to load (blocked?) " + e.target.src);
+  }, true);
+</script>
+<script>
+  // Tracker domain (host[:port]); every <id>.<this> must resolve to the tracker server.
+  //   local:    site.localhost -> tracker.localhost:8443
+  //   deployed: the VM's wildcard DuckDNS name
+  const params = new URLSearchParams(location.search);
+  window.POC_TRACKER = params.get("tracker") || (location.hostname.endsWith(".localhost")
+    ? location.hostname.replace(/^site\./, "tracker.") + ":" + (params.get("tport") || "8443")
+    : "webrtc-poc.duckdns.org:8443");
+
+  // First-party tracker script by default; ?tp=1 loads it from the tracker domain instead
+  const src = params.get("tp") === "1" ? "https://" + window.POC_TRACKER + "/t.js" : "t.js";
+  document.write('<script src="' + src + '"><\/script>');
+</script>
+</head>
+<body>
+<h1>SNI block PoC</h1>
+<p>The (first-party) tracker script stores an ID and reports to <code>https://&lt;id&gt;.<span id="trk"></span>/collect</code>.
+Block that request and check whether the ID still appears in a TLS ClientHello (server log or Wireshark).</p>
+
+<p>
+  <button onclick="pocTracker.send.fetch()">fetch POST</button>
+  <button onclick="pocTracker.send.beacon()">sendBeacon</button>
+  <button onclick="pocTracker.send.preconnect()">preconnect hint</button>
+  <button onclick="pocTracker.send.dnsprefetch()">dns-prefetch hint</button>
+  <button onclick="localStorage.removeItem('poc_tid'); document.cookie='poc_tid=; max-age=0; path=/'; location.reload()">new ID</button>
+</p>
+<p>On load: <code>?mode=fetch</code> (default), <code>beacon</code>, <code>preconnect</code>, <code>dnsprefetch</code>,
+<code>none</code>, or combined like <code>?mode=preconnect,fetch</code>. Add <code>&amp;id=…</code> for a fixed ID, <code>&amp;tp=1</code> to load the script from the tracker domain.</p>
+
+<pre id="log"></pre>
+<script>document.getElementById("trk").textContent = window.POC_TRACKER;</script>
+<script>pocLog("page loaded; " + (window.pocTracker ? "tracker id " + pocTracker.id : "tracker NOT running"));</script>
+</body>
+</html>
